@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<script src="/public/jquery.js"></script>
+	<script src="/public/layui/layui.js"></script>
+	<link rel="stylesheet" href="/public/layui/css/layui.css" media="all">
+	<title>Document</title>
+</head>
+
+<body>
+	<div style="width:300px;margin:0 auto;">
+		<form class="layui-form" action="/login">
+			<div class="layui-form-item">
+				<label class="layui-form-label">用户名</label>
+				<div class="layui-input-block">
+					<input type="text" name="user" lay-verify="title" autocomplete="off" placeholder="请输入用户名"
+						class="layui-input">
+				</div>
+			</div>
+			<div class="layui-form-item">
+				<label class="layui-form-label">密码</label>
+				<div class="layui-input-block">
+					<input type="password" name="pass" lay-verify="title" autocomplete="off" placeholder="请输入密码"
+						class="layui-input">
+				</div>
+			</div>
+			<div class="layui-form-item">
+				<div class="layui-input-block">
+					<button type="submit" class="layui-btn" lay-submit="" lay-filter="login">登录</button>
+				</div>
+			</div>
+		</form>
+	</div>
+</body>
+<script>
+	layui.use(['form', 'layedit', 'laydate'], function () {
+		var form = layui.form;
+		//监听提交
+		form.on('submit(login)', function (data) {
+			console.log(data.field);
+			$.ajax({
+				method: "POST",
+				url: "/login",
+				data: data.field,
+				dataType: "json",
+				success(e) {
+					if (e.status === "success") {
+						window.localStorage.setItem("token", e.msg.token);
+						window.location.href = "/public/home.html";
+					} else {
+						layer.alert(e.msg, {
+							title: '最终的提交信息'
+						})
+					}
+				},
+
+			});
+			// layer.alert(JSON.stringify(data.field), {
+			// 	title: '最终的提交信息'
+			// })
+			return false;
+		});
+	})
+</script>
+
+</html>

@@ -1,0 +1,25 @@
+[package]
+name = "rely-server"
+version = "0.1.0"
+edition = "2021"
+
+default-run = "rely-server"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+tokio = {version = "1.32.0",features = ["full"]}
+packet = "0.1.4"
+##tun = { version = "0.5.4", features = ["async"] }
+rand = "0.8.5"
+chrono = "0.4.30"
+config-file = "0.2.3"
+serde = {version = "1.0.188",features = ["serde_derive"]}
+
+[dependencies.uuid]
+version = "1.4.1"
+features = [
+    "v4",                # Lets you generate random UUIDs
+    "fast-rng",          # Use a faster (but still sufficiently random) RNG
+    "macro-diagnostics", # Enable better diagnostics for compile-time UUIDs
+]

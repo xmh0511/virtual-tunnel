@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<script src="/public/jquery.js"></script>
+	<script src="/public/layui/layui.js"></script>
+	<link rel="stylesheet" href="/public/layui/css/layui.css" media="all">
+	<title>Document</title>
+</head>
+<style>
+	.layui-layer #dialog {
+		display: block;
+	}
+
+	#dialog {
+		display: none;
+	}
+</style>
+
+<body>
+	<div>
+		<button type="button" class="layui-btn" onclick="addDialog()">新增</button>
+	</div>
+	<div>
+		<table class="layui-hide" id="node_list"></table>
+	</div>
+	<div id="dialog" style="width: 400px;margin-top: 10px;">
+		<form class="layui-form" style="width:80%;margin:0 auto;">
+			<div class="layui-form-item">
+				<label class="layui-form-label">地址</label>
+				<div class="layui-input-block">
+					<input type="text" name="vir" lay-verify="title" autocomplete="off" placeholder="请输入用户名"
+						class="layui-input">
+				</div>
+			</div>
+			<div class="layui-form-item">
+				<div class="layui-input-block">
+					<button type="submit" class="layui-btn" lay-submit="" lay-filter="add">添加</button>
+				</div>
+			</div>
+		</form>
+	</div>
+</body>
+<script type="text/html" id="operation">
+	<button style="height: 28px;line-height: 28px;" type="button" class="layui-btn" data-id="{{d.identifier}}" onclick="delNode('{{d.identifier}}')">删除</button>
+  </script>
+<script>
+	layui.use('table', function () {
+		var table = layui.table;
+
+		$.ajax({
+			method: "GET",
+			url: "/list",
+			dataType: "json",
+			headers: {
+				"Authorization": `Bearer ${window.localStorage.getItem("token")}`
+			},
+			success(e) {
+				if (e.status === "success") {
+					table.render({
+						elem: '#node_list'
+						, data: e.msg.list
+						, cellMinWidth: 80 //全局定义常规单元格的最小宽度，layui 2.2.1 新增
+						, cols: [[
+							{ field: 'identifier', width: 300, title: 'ID', sort: true }
+							, { field: 'vir', width: 300, title: '地址' }
+							, { field: 'del', width: 100, title: '操作', templet: '#operation' }
+						]]
+					});
+				} else {
+					layer.alert(e.msg, {
+						title: 'error'
+					})
+				}
+			}
+		});
+
+		var form = layui.form;
+		//监听提交
+		form.on('submit(add)', function (data) {
+			console.log(data.field);
+			$.ajax({
+				method: "POST",
+				url: "/add",
+				data: data.field,
+				dataType: "json",
+				headers: {
+					"Authorization": `Bearer ${window.localStorage.getItem("token")}`
+				},
+				success(e) {
+					if (e.status === "success") {
+						window.location.href = "/public/home.html";
+					} else {
+						layer.alert(e.msg, {
+							title: '最终的提交信息'
+						})
+					}
+				},
+				error(e) {
+					console.log(e);
+					layer.alert(e.responseJSON.msg, {
+						title: '最终的提交信息'
+					})
+				}
+			});
+			// layer.alert(JSON.stringify(data.field), {
+			// 	title: '最终的提交信息'
+			// })
+			return false;
+		});
+
+	});
+	function delNode(id) {
+		layer.confirm("确认删除吗？", {
+			btn: ["确定", "取消"]
+		}, function () {
+			$.ajax({
+				method: "POST",
+				url: "/del",
+				dataType: "json",
+				data: { id },
+				headers: {
+					"Authorization": `Bearer ${window.localStorage.getItem("token")}`
+				},
+				success(e) {
+					if (e.status === "success") {
+						window.location.reload();
+					} else {
+						layer.alert(e.msg, {
+							title: 'error'
+						})
+					}
+				}
+			});
+		}, function () { })
+	}
+	function addDialog() {
+		layer.open({
+			type: 1,
+			width: '600px',
+			content: $('#dialog') //这里content是一个DOM，注意：最好该元素要存放在body最外层，否则可能被其它的相对元素所影响
+		});
+	}
+</script>
+
+</html>
