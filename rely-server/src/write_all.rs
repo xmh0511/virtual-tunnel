@@ -1,6 +1,7 @@
 use tokio::{net::tcp::OwnedWriteHalf, io::AsyncWriteExt};
 
 pub async fn write_all(writer: & mut OwnedWriteHalf, buff: Vec<u8>)->Result<(),std::io::Error> {
+	let buff = dbg!(buff);
     let len = buff.len() as u16;
     let bytes = len.to_be_bytes();
     let mut write_buffer = Vec::new();
