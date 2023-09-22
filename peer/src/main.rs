@@ -2,25 +2,24 @@ use std::{net::SocketAddr, sync::Arc};
 
 use config_file::FromConfigFile;
 use futures::{SinkExt, StreamExt};
-use futures_util::stream::SplitSink;
+
 use packet::{builder::Builder, icmp, ip, ip::Protocol, Packet};
 use std::net::Ipv4Addr;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
+    net::TcpStream, sync::Mutex,
 };
-use tokio_util::codec::Framed;
-use tun::{AsyncDevice, Configuration, TunPacket, TunPacketCodec};
-
-use tokio::sync::Mutex;
+use tun::{Configuration, TunPacket};
 
 use packet::Error as PktError;
 use std::io::Error as StdError;
 
+#[derive(Debug)]
 enum Error {
     Packet(PktError),
     IO(StdError),
     Network(StdError),
+    NoNeedProcess(String),
 }
 
 impl From<PktError> for Error {
@@ -37,19 +36,22 @@ impl From<StdError> for Error {
 
 //struct Reconnection;
 
-async fn write_packet_to_socket(packet: TunPacket, stream: & mut OwnedWriteHalf) -> Result<(), Error> {
+async fn write_packet_to_socket(
+    packet: TunPacket,
+    stream: &mut OwnedWriteHalf,
+) -> Result<(), Error> {
     let buff = packet.get_bytes();
     let len = buff.len() as u16;
     let bytes = len.to_be_bytes();
     let mut write_buffer = Vec::new();
     write_buffer.extend_from_slice(&bytes);
     write_buffer.extend_from_slice(buff);
-	match stream.write_all(&write_buffer).await{
-		Ok(())=>{}
-		Err(e)=>{
-			return Err(Error::Network(e));
-		}
-	}
+    match stream.write_all(&write_buffer).await {
+        Ok(()) => {}
+        Err(e) => {
+            return Err(Error::Network(e));
+        }
+    }
     Ok(())
 }
 
@@ -71,15 +73,13 @@ fn build_icmp_reply_packet<T: AsRef<[u8]>, U: AsRef<[u8]>>(
         .build()?)
 }
 
-type TunHalfWriter = SplitSink<Framed<AsyncDevice, TunPacketCodec>, TunPacket>;
+enum WriteType {
+    ToSocket(TunPacket),
+    ToTun(TunPacket),
+}
 
-async fn parse_tun_packet(
-    raw_pkt: TunPacket,
-    framed: &mut TunHalfWriter,
-    stream: & mut OwnedWriteHalf,
-    current_ip: Ipv4Addr,
-) -> Result<(), Error> {
-    return match ip::Packet::new(raw_pkt.get_bytes()) {
+async fn parse_tun_packet(raw_pkt: TunPacket, current_ip: Ipv4Addr) -> Result<WriteType, Error> {
+    match ip::Packet::new(raw_pkt.get_bytes()) {
         Ok(ip::Packet::V4(pkt)) => {
             //println!("");
             // IP V4 packet
@@ -95,53 +95,47 @@ async fn parse_tun_packet(
                                     //tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                                     //framed.next().await;
                                     //println!("reply to {}",icmp.sequence());
-                                    framed.send(TunPacket::new(reply)).await?;
+                                    return Ok(WriteType::ToTun(TunPacket::new(reply)));
                                 } else {
-                                    write_packet_to_socket(
-                                        TunPacket::new(raw_pkt.get_bytes().to_owned()),
-                                        stream,
-                                    )
-                                    .await?;
+                                    return Ok(WriteType::ToSocket(raw_pkt));
                                 }
                             }
                             _ => {
                                 // println!("icmp packet from tun but not echo");
                                 // write_packet_to_socket(raw_pkt, stream).await;
-                                // return;
+                                return Err(Error::NoNeedProcess(
+                                    "icmp packet from tun but not echo".into(),
+                                ));
                             }
                         }
                     }
-                    _ => {}
+                    Err(e) => {
+                        return Err(Error::Packet(e.into()));
+                    }
                 }
             } else {
                 // maybe TCP, UDP or other packets
                 if pkt.destination() == current_ip {
                     //target myself
-                    framed.send(raw_pkt).await?;
+                    return Ok(WriteType::ToTun(raw_pkt));
                 } else {
-                    write_packet_to_socket(raw_pkt, stream).await?;
+                    return Ok(WriteType::ToSocket(raw_pkt));
                 }
             }
-            Ok(())
         }
         Err(err) => {
-            println!("Received an invalid packet: {:?}", err);
-            Err(err.into())
+            //println!("Received an invalid packet: {:?}", err);
+            return Err(Error::Packet(err.into()));
         }
         _ => {
-            println!("non-ip-v4 packet!!!!!");
-            Ok(())
+            //println!("non-ip-v4 packet!!!!!");
+            return Err(Error::NoNeedProcess("non-ip-v4 packet".into()));
         }
     };
 }
 
-async fn parse_socket_packet(
-    raw_pkt: TunPacket,
-    framed: &mut TunHalfWriter,
-    stream: & mut OwnedWriteHalf,
-    current_ip: Ipv4Addr,
-) -> Result<(), Error> {
-    return match ip::Packet::new(raw_pkt.get_bytes()) {
+async fn parse_socket_packet(raw_pkt: TunPacket, current_ip: Ipv4Addr) -> Result<WriteType, Error> {
+    match ip::Packet::new(raw_pkt.get_bytes()) {
         Ok(ip::Packet::V4(pkt)) => {
             //println!("ip v4 packet from socket");
             // IP V4 packet
@@ -156,12 +150,9 @@ async fn parse_socket_packet(
                                     //target myself
                                     if icmp.is_request() {
                                         let reply = build_icmp_reply_packet(&pkt, &icmp)?;
-                                        write_packet_to_socket(TunPacket::new(reply), stream)
-                                            .await?;
+                                        return Ok(WriteType::ToSocket(TunPacket::new(reply)));
                                     } else if icmp.is_reply() {
-                                        framed
-                                            .send(TunPacket::new(raw_pkt.get_bytes().to_owned()))
-                                            .await?;
+                                        return Ok(WriteType::ToTun(raw_pkt));
                                     }
                                 }
                             }
@@ -169,39 +160,90 @@ async fn parse_socket_packet(
                                 // println!("icmp packet but not icmp echo");
                                 // framed.send(raw_pkt).await.unwrap();
                                 // return;
+                                return Err(Error::NoNeedProcess(
+                                    "icmp packet but not icmp echo from socket".into(),
+                                ));
                             }
                         }
                     }
-                    _ => {}
+                    Err(e) => {
+                        return Err(Error::Packet(e.into()));
+                    }
                 }
             } else {
                 // maybe TCP, UDP packet or other packets
                 //println!("tcp packet from socket!!!!!");
                 if pkt.destination() == current_ip {
                     //target myself
-                    framed.send(raw_pkt).await?;
+                    return Ok(WriteType::ToTun(raw_pkt));
                 }
+                return Err(Error::NoNeedProcess("destination is not me".into()));
             }
-            Ok(())
+            return Err(Error::NoNeedProcess(
+                "neither ICMP nor {TCP, UDP} socket".into(),
+            ));
         }
         Err(err) => {
-            println!("Received an invalid packet: {:?}", err);
-            Err(err.into())
+            //println!("Received an invalid packet: {:?}", err);
+            return Err(Error::Packet(err.into()));
         }
         _ => {
-            println!("non-ip-v4 packet!!!!!");
-            Ok(())
+            //println!("non-ip-v4 packet!!!!!");
+            return Err(Error::NoNeedProcess("non-ip-v4 packet".into()));
         }
     };
 }
 
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
-
-enum Message {
-    SetSocketWriter(Arc<Mutex<OwnedWriteHalf>>),
-    DataFromSocket(TunPacket),
-    DataFromTun(TunPacket),
+async fn read_data_len(stream: &mut OwnedReadHalf) -> Option<u16> {
+    let mut buff_len = [0u8; 2];
+    let mut read_size = 0;
+    loop {
+        match stream.read(&mut buff_len[read_size..]).await {
+            Ok(size) => {
+                if size == 0 {
+                    return None;
+                }
+                read_size += size;
+                if read_size == 2 {
+                    let len = u16::from_be_bytes(buff_len);
+                    return Some(len);
+                } else {
+                    continue;
+                }
+            }
+            Err(_) => {
+                return None;
+            }
+        }
+    }
 }
+
+async fn read_body(len: u16, reader: &mut OwnedReadHalf) -> Option<Vec<u8>> {
+    let len = len as usize;
+    let mut buf = Vec::new();
+    buf.resize(len as usize, b'\0');
+    let mut read_len = 0;
+    loop {
+        match reader.read(&mut buf[read_len..]).await {
+            Ok(size) => {
+                if size == 0 {
+                    return None;
+                }
+                read_len += size;
+                if read_len == len {
+                    return Some(buf);
+                } else {
+                    continue;
+                }
+            }
+            Err(_) => {
+                return None;
+            }
+        }
+    }
+}
+
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 
 use serde::Deserialize;
 
@@ -274,143 +316,41 @@ async fn main() {
         }
     };
 
-    //let mut buff_len = [0u8; 2];
-    // let r = stream.read(& mut buff_len).await;
+    let (mut tun_writer, mut tun_reader) = framed.split();
 
-    async fn read_data_len(stream: &mut OwnedReadHalf) -> Option<u16> {
-        let mut buff_len = [0u8; 2];
-        let mut read_size = 0;
+    let (tun_writer_tx, mut tun_writer_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (socket_writer_tx, socket_writer_rx) = tokio::sync::mpsc::unbounded_channel();
+    let _tun_writer_task = tokio::spawn(async move {
         loop {
-            match stream.read(&mut buff_len[read_size..]).await {
-                Ok(size) => {
-                    if size == 0 {
-                        return None;
-                    }
-                    read_size += size;
-                    if read_size == 2 {
-                        let len = u16::from_be_bytes(buff_len);
-                        return Some(len);
-                    } else {
-                        continue;
-                    }
-                }
-                Err(_) => {
-                    return None;
-                }
-            }
-        }
-    }
-
-    async fn read_body(len: u16, reader: &mut OwnedReadHalf) -> Option<Vec<u8>> {
-        let len = len as usize;
-        let mut buf = Vec::new();
-        buf.resize(len as usize, b'\0');
-        let mut read_len = 0;
-        loop {
-            match reader.read(&mut buf[read_len..]).await {
-                Ok(size) => {
-                    if size == 0 {
-                        return None;
-                    }
-                    read_len += size;
-                    if read_len == len {
-                        return Some(buf);
-                    } else {
-                        continue;
-                    }
-                }
-                Err(_) => {
-                    return None;
-                }
-            }
-        }
-    }
-
-    // async fn reconnect(
-    //     rely_server: SocketAddr,
-    //     times: &mut i32,
-    //     unique_identifier: String,
-    // ) -> TcpStream {
-    // }
-
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let (tun_writer, mut tun_reader) = framed.split();
-
-	//let (request_reconn, mut rx_reconn) =  tokio::sync::mpsc::unbounded_channel();
-
-    let write_task = tokio::spawn(async move {
-        let mut socket_handler: Option<Arc<Mutex<OwnedWriteHalf>>> = None;
-        let tun_writer = Arc::new(Mutex::new(tun_writer));
-        loop {
-            match rx.recv().await {
-                Some(Message::DataFromTun(packet)) => match &socket_handler {
-                    Some(socket) => {
-                        let tun_writer = Arc::clone(&tun_writer);
-                        let socket = Arc::clone(socket);
-						//let request_reconn = request_reconn.clone();
-                        tokio::spawn(async move {
-                            let mut tun_writer = tun_writer.lock().await;
-							let mut socket = socket.lock().await;
-                            match parse_tun_packet(
-                                packet,
-                                &mut tun_writer,
-                                & mut socket,
-                                current_vir_ip.clone(),
-                            )
-                            .await{
-								Err(Error::Network(_))=>{
-									//let _ = request_reconn.send(Reconnection);
-								}
-								_=>{}
-							};
-                        });
-                    }
-                    None => {
-					}
+            match tun_writer_rx.recv().await {
+                Some(pkt) => match tun_writer.send(pkt).await {
+                    Ok(_) => {}
+                    Err(_) => {}
                 },
-                Some(Message::DataFromSocket(packet)) => match &socket_handler {
-                    Some(socket) => {
-                        let tun_writer = Arc::clone(&tun_writer);
-                        let socket = Arc::clone(socket);
-						//let request_reconn = request_reconn.clone();
-                        tokio::spawn(async move {
-                            let mut tun_writer = tun_writer.lock().await;
-							let mut socket = socket.lock().await;
-                            match parse_socket_packet(
-                                packet,
-                                &mut tun_writer,
-                                & mut socket,
-                                current_vir_ip.clone(),
-                            )
-                            .await{
-								Err(Error::Network(_))=>{
-									//let _ = request_reconn.send(Reconnection);
-								}
-								_=>{}
-							}
-                        });
-                    }
-                    None => {}
-                },
-                Some(Message::SetSocketWriter(socket_writer)) => {
-                    socket_handler = Some(socket_writer);
+                None => {
+                    break;
                 }
-                None => {}
             }
         }
     });
 
-    let tx_in_socket = tx.clone();
-
-    let tun_read_task = tokio::spawn(async move {
-        loop {
-            while let Some(v) = tun_reader.next().await {
-                match v {
-                    Ok(packet) => {
-                        let _ = tx.send(Message::DataFromTun(packet));
+    let tun_writer_tx_in_tun_read = tun_writer_tx.clone();
+    let socket_writer_tx_in_tun_read = socket_writer_tx.clone();
+    let _tun_read_task = tokio::spawn(async move {
+        while let Some(v) = tun_reader.next().await {
+            match v {
+                Ok(packet) => match parse_tun_packet(packet, current_vir_ip).await {
+                    Ok(WriteType::ToTun(pkt)) => {
+                        let _ = tun_writer_tx_in_tun_read.send(pkt);
                     }
-                    Err(_) => {}
-                }
+                    Ok(WriteType::ToSocket(pkt)) => {
+                        let _ = socket_writer_tx_in_tun_read.send(pkt);
+                    }
+                    Err(e) => {
+                        println!("from tun:\n{e:?}");
+                    }
+                },
+                Err(_) => {}
             }
         }
     });
@@ -441,69 +381,71 @@ async fn main() {
         }
     };
 
-    let (mut socket_reader, socket_writer) = stream.into_split();
+    let (mut socket_reader, mut socket_writer) = stream.into_split();
 
-    let _ = tx_in_socket.send(Message::SetSocketWriter(Arc::new(Mutex::new(socket_writer))));
-
-    let socket_read_task = tokio::spawn(async move {
-        loop {
-            match read_data_len(&mut socket_reader).await {
-                Some(size) => match read_body(size, &mut socket_reader).await {
-                    Some(buf) => {
-                        let _ = tx_in_socket.send(Message::DataFromSocket(TunPacket::new(buf)));
-                    }
+    //let _ = tx_in_socket.send(Message::SetSocketWriter(Arc::new(Mutex::new(socket_writer))));
+    let socket_writer_rx = Arc::new(Mutex::new(socket_writer_rx));
+    loop {
+        let (recon_tx, mut recon_rx) = tokio::sync::mpsc::unbounded_channel();
+        let tun_writer_tx_in_socket_read = tun_writer_tx.clone();
+        let socket_writer_tx_in_socket_read = socket_writer_tx.clone();
+        let recon_tx_0 = recon_tx.clone();
+        let socket_read_task = tokio::spawn(async move {
+            loop {
+                match read_data_len(&mut socket_reader).await {
+                    Some(size) => match read_body(size, &mut socket_reader).await {
+                        Some(buf) => {
+                            match parse_socket_packet(TunPacket::new(buf), current_vir_ip).await {
+                                Ok(WriteType::ToSocket(pkt)) => {
+                                    let _ = socket_writer_tx_in_socket_read.send(pkt);
+                                }
+                                Ok(WriteType::ToTun(pkt)) => {
+                                    let _ = tun_writer_tx_in_socket_read.send(pkt);
+                                }
+                                Err(e) => {
+                                    println!("from socket:\n{e:?}");
+                                }
+                            }
+                        }
+                        None => {
+                            let _ = recon_tx_0.send(());
+                            return;
+                        }
+                    },
                     None => {
-                        let (r, w) = try_to_reconnect_network.clone()(config_file.try_times).await;
-                        let _ = tx_in_socket.send(Message::SetSocketWriter(Arc::new(Mutex::new(w))));
-                        socket_reader = r;
+                        let _ = recon_tx_0.send(());
+                        return;
                     }
-                },
-                None => {
-                    let (r, w) = try_to_reconnect_network.clone()(config_file.try_times).await;
-                    let _ = tx_in_socket.send(Message::SetSocketWriter(Arc::new(Mutex::new(w))));
-                    socket_reader = r;
                 }
             }
-        }
-    });
+        });
 
-    socket_read_task.await.unwrap();
-    write_task.await.unwrap();
-    tun_read_task.await.unwrap();
+		let socket_writer_rx = socket_writer_rx.clone();
+        let socket_writer_task = tokio::spawn(async move {
+			let mut guard = socket_writer_rx.lock().await;
+            loop {
+                match guard.recv().await {
+                    Some(pkt) => match write_packet_to_socket(pkt, &mut socket_writer).await {
+                        Ok(_) => {}
+                        Err(e) => {
+                            println!("write socket error: {e:?}");
+                            let _ = recon_tx.send(());
+                            return;
+                        }
+                    },
+                    None => {
+                        return;
+                    }
+                }
+            }
+        });
 
-    // loop {
-    //     tokio::select! {
-    //         (pkt,now) = async {
-    //             let now = std::time::Instant::now();
-    //             (framed.next().await,now)
+        let _ = recon_rx.recv().await;
 
-    //         } =>{
-    //             println!("read tun {:?}",now.elapsed());
-    //             parse_tun_packet(pkt,& mut framed, & mut stream,current_vir_ip.clone()).await;
-    //         }
-    //         (size,now) = async {
-    //             let now = std::time::Instant::now();
-    //             (read_data_len(& mut stream).await,now)
-    //         } =>{
-    //             let time = chrono::Local::now().timestamp_millis();
-    //             println!("read network {:?}",now.elapsed());
-    //             match size{
-    //                 Some(size)=>{
-    //                     match read_body(size,& mut stream).await{
-    //                         Some(buf)=>{
-    //                             //framed.send(packet).await.unwrap();
-    //                             parse_socket_packet(TunPacket::new(buf),& mut framed,& mut stream,current_vir_ip.clone()).await;
-    //                         }
-    //                         None=>{
-    //                             reconnect(& mut stream,rely_server.clone(),& mut re_connect_times,unique_identifier.clone()).await;
-    //                         }
-    //                     }
-    //                 }
-    //                 None=>{
-    //                     reconnect(& mut stream,rely_server.clone(),& mut re_connect_times,unique_identifier.clone()).await;
-    //                 }
-    //             }
-    //         }
-    //     }
-    // }
+        socket_read_task.abort();
+        socket_writer_task.abort();
+        let (r, w) = (try_to_reconnect_network.clone())(config_file.try_times).await;
+        socket_reader = r;
+        socket_writer = w;
+    }
 }
