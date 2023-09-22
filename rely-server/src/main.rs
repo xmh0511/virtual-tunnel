@@ -7,7 +7,7 @@ use tokio::{
         tcp::{OwnedReadHalf, OwnedWriteHalf},
         TcpListener,
     },
-    task::JoinHandle,
+    task::JoinHandle, sync::Mutex,
 };
 
 //use tun::TunPacket;
@@ -29,7 +29,7 @@ enum Message {
 struct WriterHandle {
     timestamp: i64,
     vir_addr: String,
-    socket: Arc<OwnedWriteHalf>,
+    socket: Arc<Mutex<OwnedWriteHalf>>,
     #[allow(dead_code)]
     physical_addr:String
 }
@@ -65,7 +65,7 @@ async fn read_body(len: u16, reader: &mut OwnedReadHalf) -> Result<Vec<u8>, std:
 async fn find_another(
     map: &HashMap<String, WriterHandle>,
     me: String,
-) -> Option<&Arc<OwnedWriteHalf>> {
+) -> Option<&Arc<Mutex<OwnedWriteHalf>>> {
     for i in map {
         if *i.1.vir_addr == me {
             return Some(&i.1.socket);
@@ -169,7 +169,13 @@ async fn main() {
                                 let _ = tx_async.send(AsyncMessage::Add((
                                     uuid.clone(),
                                     tokio::spawn(async move {
-                                        write_all::write_all(writer, buff).await;
+										let mut writer = writer.lock().await;
+                                        match write_all::write_all(& mut writer, buff).await{
+											Ok(())=>{}
+											Err(_)=>{
+												let _ = writer.shutdown().await;
+											}
+										}
                                         let _ = tx_async_copy.send(AsyncMessage::Remove(uuid));
                                     }),
                                 )));
@@ -255,7 +261,7 @@ async fn main() {
         let writer = WriterHandle {
             timestamp,
             vir_addr,
-            socket: Arc::new(writer),
+            socket: Arc::new(Mutex::new(writer)),
             physical_addr:socket_addr.ip().to_string()
         };
         let _ = tx.send(Message::Add((index.clone(), writer)));

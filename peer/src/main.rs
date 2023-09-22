@@ -37,36 +37,19 @@ impl From<StdError> for Error {
 
 //struct Reconnection;
 
-async fn write_packet_to_socket(packet: TunPacket, stream: &OwnedWriteHalf) -> Result<(), Error> {
+async fn write_packet_to_socket(packet: TunPacket, stream: & mut OwnedWriteHalf) -> Result<(), Error> {
     let buff = packet.get_bytes();
     let len = buff.len() as u16;
     let bytes = len.to_be_bytes();
     let mut write_buffer = Vec::new();
     write_buffer.extend_from_slice(&bytes);
     write_buffer.extend_from_slice(buff);
-    let total_size = write_buffer.len();
-    let mut write_size = 0;
-    loop {
-        let _ = stream.writable().await;
-        match stream.try_write(&write_buffer[write_size..]) {
-            Ok(size) => {
-                if size == 0 {
-                    //todo
-                    return Err(Error::Network(StdError::new(
-                        std::io::ErrorKind::NotConnected,
-                        "",
-                    )));
-                }
-                write_size += size;
-                if write_size == total_size {
-                    break;
-                }
-            }
-            Err(e) => {
-                return Err(Error::Network(e));
-            }
-        }
-    }
+	match stream.write_all(&write_buffer).await{
+		Ok(())=>{}
+		Err(e)=>{
+			return Err(Error::Network(e));
+		}
+	}
     Ok(())
 }
 
@@ -93,7 +76,7 @@ type TunHalfWriter = SplitSink<Framed<AsyncDevice, TunPacketCodec>, TunPacket>;
 async fn parse_tun_packet(
     raw_pkt: TunPacket,
     framed: &mut TunHalfWriter,
-    stream: &OwnedWriteHalf,
+    stream: & mut OwnedWriteHalf,
     current_ip: Ipv4Addr,
 ) -> Result<(), Error> {
     return match ip::Packet::new(raw_pkt.get_bytes()) {
@@ -155,7 +138,7 @@ async fn parse_tun_packet(
 async fn parse_socket_packet(
     raw_pkt: TunPacket,
     framed: &mut TunHalfWriter,
-    stream: &OwnedWriteHalf,
+    stream: & mut OwnedWriteHalf,
     current_ip: Ipv4Addr,
 ) -> Result<(), Error> {
     return match ip::Packet::new(raw_pkt.get_bytes()) {
@@ -215,7 +198,7 @@ async fn parse_socket_packet(
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 
 enum Message {
-    SetSocketWriter(Arc<OwnedWriteHalf>),
+    SetSocketWriter(Arc<Mutex<OwnedWriteHalf>>),
     DataFromSocket(TunPacket),
     DataFromTun(TunPacket),
 }
@@ -356,7 +339,7 @@ async fn main() {
 	//let (request_reconn, mut rx_reconn) =  tokio::sync::mpsc::unbounded_channel();
 
     let write_task = tokio::spawn(async move {
-        let mut socket_handler: Option<Arc<OwnedWriteHalf>> = None;
+        let mut socket_handler: Option<Arc<Mutex<OwnedWriteHalf>>> = None;
         let tun_writer = Arc::new(Mutex::new(tun_writer));
         loop {
             match rx.recv().await {
@@ -367,10 +350,11 @@ async fn main() {
 						//let request_reconn = request_reconn.clone();
                         tokio::spawn(async move {
                             let mut tun_writer = tun_writer.lock().await;
+							let mut socket = socket.lock().await;
                             match parse_tun_packet(
                                 packet,
                                 &mut tun_writer,
-                                &socket,
+                                & mut socket,
                                 current_vir_ip.clone(),
                             )
                             .await{
@@ -391,10 +375,11 @@ async fn main() {
 						//let request_reconn = request_reconn.clone();
                         tokio::spawn(async move {
                             let mut tun_writer = tun_writer.lock().await;
+							let mut socket = socket.lock().await;
                             match parse_socket_packet(
                                 packet,
                                 &mut tun_writer,
-                                &socket,
+                                & mut socket,
                                 current_vir_ip.clone(),
                             )
                             .await{
@@ -458,7 +443,7 @@ async fn main() {
 
     let (mut socket_reader, socket_writer) = stream.into_split();
 
-    let _ = tx_in_socket.send(Message::SetSocketWriter(Arc::new(socket_writer)));
+    let _ = tx_in_socket.send(Message::SetSocketWriter(Arc::new(Mutex::new(socket_writer))));
 
     let socket_read_task = tokio::spawn(async move {
         loop {
@@ -469,13 +454,13 @@ async fn main() {
                     }
                     None => {
                         let (r, w) = try_to_reconnect_network.clone()(config_file.try_times).await;
-                        let _ = tx_in_socket.send(Message::SetSocketWriter(Arc::new(w)));
+                        let _ = tx_in_socket.send(Message::SetSocketWriter(Arc::new(Mutex::new(w))));
                         socket_reader = r;
                     }
                 },
                 None => {
                     let (r, w) = try_to_reconnect_network.clone()(config_file.try_times).await;
-                    let _ = tx_in_socket.send(Message::SetSocketWriter(Arc::new(w)));
+                    let _ = tx_in_socket.send(Message::SetSocketWriter(Arc::new(Mutex::new(w))));
                     socket_reader = r;
                 }
             }
