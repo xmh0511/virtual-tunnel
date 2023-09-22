@@ -31,7 +31,7 @@ struct WriterHandle {
     vir_addr: String,
     socket: Arc<Mutex<OwnedWriteHalf>>,
     #[allow(dead_code)]
-    physical_addr:String
+    physical_addr: String,
 }
 
 async fn read_body(len: u16, reader: &mut OwnedReadHalf) -> Result<Vec<u8>, std::io::Error> {
@@ -66,12 +66,9 @@ async fn find_another(
     map: &HashMap<String, WriterHandle>,
     me: String,
 ) -> Option<&Arc<Mutex<OwnedWriteHalf>>> {
-    for i in map {
-        if *i.1.vir_addr == me {
-            return Some(&i.1.socket);
-        }
-    }
-    return None;
+    map.iter()
+        .find(|(_key, value)| value.vir_addr == me)
+        .map(|(_, v)| &v.socket)
 }
 
 // enum AsyncMessage {
@@ -92,33 +89,30 @@ struct NodeConfig {
 }
 
 #[derive(Deserialize)]
-struct SerConfig{
-	bind:String
+struct SerConfig {
+    bind: String,
 }
 
 use config_file::FromConfigFile;
 
-fn read_node_list()->HashMap<String, String>{
-	match NodeConfig::from_config_file("./node.toml"){
-		Ok(config)=>{
-			let config_hosts: HashMap<String, String> = {
-				let vec = config.host;
-				vec.iter()
-					.map(|v| (v.identifier.clone(), v.vir.clone()))
-					.collect()
-			};
-			config_hosts
-		}
-		Err(_)=>{
-			Default::default()
-		}
-	}
+fn read_node_list() -> HashMap<String, String> {
+    match NodeConfig::from_config_file("./node.toml") {
+        Ok(config) => {
+            let config_hosts: HashMap<String, String> = {
+                let vec = config.host;
+                vec.iter()
+                    .map(|v| (v.identifier.clone(), v.vir.clone()))
+                    .collect()
+            };
+            config_hosts
+        }
+        Err(_) => Default::default(),
+    }
 }
 
 #[tokio::main]
 async fn main() {
-
-	let config  = SerConfig::from_config_file("./rely_config.toml").unwrap();
+    let config = SerConfig::from_config_file("./rely_config.toml").unwrap();
     let _ = NodeConfig::from_config_file("./node.toml").unwrap();
 
     let listen = TcpListener::bind(config.bind).await.unwrap();
@@ -164,15 +158,15 @@ async fn main() {
                         Some(dest) => match find_another(&map, dest).await {
                             Some(writer) => {
                                 let writer = Arc::clone(writer);
-								tokio::spawn(async move {
-									let mut writer = writer.lock().await;
-									match write_all::write_all(& mut writer, buff).await{
-										Ok(())=>{}
-										Err(_)=>{
-											let _ = writer.shutdown().await;
-										}
-									}
-								});
+                                tokio::spawn(async move {
+                                    let mut writer = writer.lock().await;
+                                    match write_all::write_all(&mut writer, buff).await {
+                                        Ok(()) => {}
+                                        Err(_) => {
+                                            let _ = writer.shutdown().await;
+                                        }
+                                    }
+                                });
                             }
                             None => {}
                         },
@@ -224,21 +218,19 @@ async fn main() {
             let mut buf = [0u8; 32];
             match stream.read_exact(&mut buf).await {
                 Ok(size) => {
-                    if size != 32{
+                    if size != 32 {
                         continue;
                     }
-                    match String::from_utf8(buf.to_vec()){
-                        Ok(index)=>{
-                            index
-                        }
-                        Err(_)=>{
+                    match String::from_utf8(buf.to_vec()) {
+                        Ok(index) => index,
+                        Err(_) => {
                             continue;
                         }
                     }
-                },
+                }
                 Err(_) => {
                     continue;
-                },
+                }
             }
         };
         //println!("its identifier {its_identifier}");
@@ -256,7 +248,7 @@ async fn main() {
             timestamp,
             vir_addr,
             socket: Arc::new(Mutex::new(writer)),
-            physical_addr:socket_addr.ip().to_string()
+            physical_addr: socket_addr.ip().to_string(),
         };
         let _ = tx.send(Message::Add((index.clone(), writer)));
         let tx = tx.clone();
