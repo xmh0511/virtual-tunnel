@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, io::Write};
+use std::io::Write;
 fn main(){
     let mut socket = std::net::TcpStream::connect("127.0.0.1:3000").unwrap();
 	loop{

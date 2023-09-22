@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, io::{Write, Read}, net::TcpStream};
+use std::{io::Read, net::TcpStream};
 
 fn read_body(len: u16, reader: &mut TcpStream) -> Result<Vec<u8>, std::io::Error> {
     let len = len as usize;

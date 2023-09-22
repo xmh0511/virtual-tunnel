@@ -7,7 +7,7 @@ use tokio::{
         tcp::{OwnedReadHalf, OwnedWriteHalf},
         TcpListener,
     },
-    task::JoinHandle, sync::Mutex,
+    sync::Mutex,
 };
 
 //use tun::TunPacket;
@@ -74,10 +74,10 @@ async fn find_another(
     return None;
 }
 
-enum AsyncMessage {
-    Add((String, JoinHandle<()>)),
-    Remove(String),
-}
+// enum AsyncMessage {
+//     Add((String, JoinHandle<()>)),
+//     Remove(String),
+// }
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -124,23 +124,23 @@ async fn main() {
     let listen = TcpListener::bind(config.bind).await.unwrap();
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
-    let (tx_async, mut rx_async) = tokio::sync::mpsc::unbounded_channel::<AsyncMessage>();
+    //let (tx_async, mut rx_async) = tokio::sync::mpsc::unbounded_channel::<AsyncMessage>();
 
-    let establish_task = tokio::spawn(async move {
-        let mut save_tasks = HashMap::new();
-        loop {
-            match rx_async.recv().await {
-                Some(AsyncMessage::Add((id, task))) => {
-                    save_tasks.insert(id, task);
-                }
-                Some(AsyncMessage::Remove(id)) => {
-                    //println!("task complete, so removed");
-                    save_tasks.remove(&id);
-                }
-                None => {}
-            }
-        }
-    });
+    // let establish_task = tokio::spawn(async move {
+    //     let mut save_tasks = HashMap::new();
+    //     loop {
+    //         match rx_async.recv().await {
+    //             Some(AsyncMessage::Add((id, task))) => {
+    //                 save_tasks.insert(id, task);
+    //             }
+    //             Some(AsyncMessage::Remove(id)) => {
+    //                 //println!("task complete, so removed");
+    //                 save_tasks.remove(&id);
+    //             }
+    //             None => {}
+    //         }
+    //     }
+    // });
     let write_tasks = tokio::spawn(async move {
         let mut map: HashMap<String, WriterHandle> = HashMap::new();
         loop {
@@ -164,21 +164,15 @@ async fn main() {
                         Some(dest) => match find_another(&map, dest).await {
                             Some(writer) => {
                                 let writer = Arc::clone(writer);
-                                let uuid = uuid::Uuid::new_v4().to_string();
-                                let tx_async_copy = tx_async.clone();
-                                let _ = tx_async.send(AsyncMessage::Add((
-                                    uuid.clone(),
-                                    tokio::spawn(async move {
-										let mut writer = writer.lock().await;
-                                        match write_all::write_all(& mut writer, buff).await{
-											Ok(())=>{}
-											Err(_)=>{
-												let _ = writer.shutdown().await;
-											}
+								tokio::spawn(async move {
+									let mut writer = writer.lock().await;
+									match write_all::write_all(& mut writer, buff).await{
+										Ok(())=>{}
+										Err(_)=>{
+											let _ = writer.shutdown().await;
 										}
-                                        let _ = tx_async_copy.send(AsyncMessage::Remove(uuid));
-                                    }),
-                                )));
+									}
+								});
                             }
                             None => {}
                         },
@@ -305,8 +299,6 @@ async fn main() {
                 }
             }
         });
-        //index += 1;
     }
     write_tasks.await.unwrap();
-    establish_task.await.unwrap();
 }
