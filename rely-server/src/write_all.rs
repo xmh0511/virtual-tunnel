@@ -7,6 +7,13 @@ pub async fn write_all(writer: & mut OwnedWriteHalf, buff: Vec<u8>)->Result<(),s
     let mut write_buffer = Vec::new();
     write_buffer.extend_from_slice(&bytes);
     write_buffer.extend_from_slice(&buff);
-	writer.write_all(&write_buffer).await?;
+	tokio::select! {
+		v = writer.write_all(&write_buffer) =>{
+			v?
+		}
+		_ = tokio::time::sleep(std::time::Duration::from_secs(8)) =>{
+			return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, ""));
+		}
+	};
 	Ok(())
 }

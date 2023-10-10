@@ -363,6 +363,7 @@ async fn main() {
                 println!("try to reconnect!!!!");
                 match TcpStream::connect(rely_server.clone()).await {
                     Ok(mut new_stream) => {
+						println!("connect to server successfully!!!!");
                         new_stream
                             .write_all(unique_identifier.as_bytes())
                             .await

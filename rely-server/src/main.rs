@@ -18,6 +18,27 @@ pub mod ip_dest_parse;
 
 //mod mock_reply;
 
+use time::{macros::format_description, UtcOffset};
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::fmt::time::OffsetTime;
+
+pub fn init_log()->Option<WorkerGuard>{
+	let local_time = OffsetTime::new(
+        UtcOffset::from_hms(8, 0, 0).unwrap(),
+        format_description!("[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]"),
+    );
+	if !cfg!(debug_assertions){
+		let file_appender = tracing_appender::rolling::daily("logs", "tunnel");
+		let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+		tracing_subscriber::fmt().with_timer(local_time).with_max_level(tracing::Level::INFO).with_writer(non_blocking).init();
+		Some(guard)
+	}else{
+		tracing_subscriber::fmt().with_timer(local_time).init();
+		None
+	}
+}
+
+
 #[allow(dead_code)]
 enum Message {
     Add((String, WriterHandle)),
@@ -32,6 +53,7 @@ struct WriterHandle {
     socket: Arc<Mutex<OwnedWriteHalf>>,
     #[allow(dead_code)]
     physical_addr: String,
+    identifier: String,
 }
 
 async fn read_body(len: u16, reader: &mut OwnedReadHalf) -> Result<Vec<u8>, std::io::Error> {
@@ -62,13 +84,10 @@ async fn read_body(len: u16, reader: &mut OwnedReadHalf) -> Result<Vec<u8>, std:
     }
 }
 
-async fn find_another(
-    map: &HashMap<String, WriterHandle>,
-    me: String,
-) -> Option<&Arc<Mutex<OwnedWriteHalf>>> {
+async fn find_another(map: &HashMap<String, WriterHandle>, me: String) -> Option<&WriterHandle> {
     map.iter()
         .find(|(_key, value)| value.vir_addr == me)
-        .map(|(_, v)| &v.socket)
+        .map(|(_, v)| v)
 }
 
 // enum AsyncMessage {
@@ -115,9 +134,12 @@ async fn main() {
     let config = SerConfig::from_config_file("./rely_config.toml").unwrap();
     let _ = NodeConfig::from_config_file("./node.toml").unwrap();
 
+	let _log_guard = init_log();
+
     let listen = TcpListener::bind(config.bind).await.unwrap();
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
+    let tx = Arc::new(tx);
     //let (tx_async, mut rx_async) = tokio::sync::mpsc::unbounded_channel::<AsyncMessage>();
 
     // let establish_task = tokio::spawn(async move {
@@ -135,6 +157,7 @@ async fn main() {
     //         }
     //     }
     // });
+    let weak_tx = tx.downgrade();
     let write_tasks = tokio::spawn(async move {
         let mut map: HashMap<String, WriterHandle> = HashMap::new();
         loop {
@@ -155,14 +178,27 @@ async fn main() {
                 Some(Message::Data((_num, buff))) => {
                     //println!("receive data from {num}:\n{buff:?}");
                     match ip_dest_parse::get_dest_ip(&buff) {
-                        Some(dest) => match find_another(&map, dest).await {
+                        Some((source,dest)) => match find_another(&map, dest.clone()).await {
                             Some(writer) => {
-                                let writer = Arc::clone(writer);
+                                let timestamp = writer.timestamp;
+                                let writer_identifier = writer.identifier.clone();
+                                let writer = Arc::clone(&writer.socket);
+                                let self_sender_weak = weak_tx.clone();
                                 tokio::spawn(async move {
                                     let mut writer = writer.lock().await;
                                     match write_all::write_all(&mut writer, buff).await {
                                         Ok(()) => {}
-                                        Err(_) => {
+                                        Err(e) => {
+											tracing::info!("Removed, {source} writing to {dest} has an error: {e:?}");
+                                            match self_sender_weak.upgrade() {
+                                                Some(tx) => {
+                                                    let _ = tx.send(Message::Remove((
+                                                        writer_identifier,
+                                                        timestamp,
+                                                    )));
+                                                }
+                                                None => {}
+                                            }
                                             let _ = writer.shutdown().await;
                                         }
                                     }
@@ -179,7 +215,8 @@ async fn main() {
                         .iter()
                         .find(|(ip, handler)| **ip == index && handler.timestamp == version)
                     {
-                        Some((index, _)) => {
+                        Some((index, handler)) => {
+							tracing::info!("{}, {}, {} removed successfully from the group",handler.identifier,handler.physical_addr,handler.vir_addr);
                             let index = index.to_owned();
                             map.remove(&index);
                         }
@@ -246,10 +283,12 @@ async fn main() {
         let timestamp = chrono::Local::now().timestamp_nanos();
         let writer = WriterHandle {
             timestamp,
-            vir_addr,
+            vir_addr:vir_addr.clone(),
             socket: Arc::new(Mutex::new(writer)),
             physical_addr: socket_addr.ip().to_string(),
+            identifier: index.clone(),
         };
+		tracing::info!("{index}, {socket_addr}, {vir_addr} adds to the group");
         let _ = tx.send(Message::Add((index.clone(), writer)));
         let tx = tx.clone();
         tokio::spawn(async move {
@@ -261,6 +300,7 @@ async fn main() {
                     Ok(size) => {
                         //println!("read in comming {size}");
                         if size == 0 {
+							tracing::info!("Removed, {index}<=>{vir_addr} may partially shutdown during read len with size 0");
                             let _ = tx.send(Message::Remove((index, timestamp)));
                             return;
                         }
@@ -275,7 +315,8 @@ async fn main() {
                                     let _ = tx.send(Message::Data((index, buf)));
                                     //let _ = tx.send(Message::Mock((index, buf)));
                                 }
-                                Err(_) => {
+                                Err(e) => {
+									tracing::info!("Removed, {index}<=>{vir_addr} has an error during read packet body: {e:?}");
                                     let _ = tx.send(Message::Remove((index, timestamp)));
                                     return;
                                 }
@@ -284,7 +325,8 @@ async fn main() {
                             continue;
                         }
                     }
-                    Err(_) => {
+                    Err(e) => {
+						tracing::info!("Removed, {index}<=>{vir_addr} has an error during read body len: {e:?}");
                         let _ = tx.send(Message::Remove((index, timestamp)));
                         return;
                     }
