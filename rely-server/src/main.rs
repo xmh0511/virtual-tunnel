@@ -225,29 +225,32 @@ async fn main() {
                     }
                 }
                 Some(Message::Remove((index, version))) => {
-                    println!("remove {index}, {version}, {map:?}");
-                    match map
-                        .iter()
-                        .find(|(ip, handler)| **ip == index && handler.timestamp == version)
-                    {
+                    //println!("remove {index}, {version}, {map:?}");
+                    match map.iter().find(|(ip, _handler)| **ip == index) {
                         Some((index, handler)) => {
-                            tracing::info!(
-                                "{}, {}, {} removed successfully from the group",
-                                handler.identifier,
-                                handler.physical_addr,
-                                handler.vir_addr
-                            );
-                            let index = index.to_owned();
-                            let writer = map.remove(&index);
-                            match writer {
-                                Some(v) => {
-                                    let _ = v.socket.lock().await.shutdown().await;
+                            if handler.timestamp <= version {
+                                tracing::info!(
+                                    "{}, {}, {} removed successfully from the group",
+                                    handler.identifier,
+                                    handler.physical_addr,
+                                    handler.vir_addr
+                                );
+                                let index = index.to_owned();
+                                let writer = map.remove(&index);
+                                match writer {
+                                    Some(v) => {
+                                        let _ = v.socket.lock().await.shutdown().await;
+                                    }
+                                    None => {}
                                 }
-                                None => {}
+                            } else {
+                                println!("Outdate remove: key {index}, saved key {}, remove version {version}, saved version {},",handler.identifier,handler.timestamp);
+                                tracing::info!("Outdate remove: key {index}, saved key {}, remove version {version}, saved version {},",handler.identifier,handler.timestamp);
                             }
                         }
                         None => {
-                            println!("{index} {version} not found in the map when removing");
+                            println!("not found {index}, {version} in {map:?}");
+                            tracing::info!("{index} {version} not found in the map when removing");
                         }
                     }
                 }
