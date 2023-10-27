@@ -22,22 +22,25 @@ use time::{macros::format_description, UtcOffset};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::fmt::time::OffsetTime;
 
-pub fn init_log()->Option<WorkerGuard>{
-	let local_time = OffsetTime::new(
+pub fn init_log() -> Option<WorkerGuard> {
+    let local_time = OffsetTime::new(
         UtcOffset::from_hms(8, 0, 0).unwrap(),
         format_description!("[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]"),
     );
-	if !cfg!(debug_assertions){
-		let file_appender = tracing_appender::rolling::daily("logs", "tunnel");
-		let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
-		tracing_subscriber::fmt().with_timer(local_time).with_max_level(tracing::Level::INFO).with_writer(non_blocking).init();
-		Some(guard)
-	}else{
-		tracing_subscriber::fmt().with_timer(local_time).init();
-		None
-	}
+    if !cfg!(debug_assertions) {
+        let file_appender = tracing_appender::rolling::daily("logs", "tunnel");
+        let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+        tracing_subscriber::fmt()
+            .with_timer(local_time)
+            .with_max_level(tracing::Level::INFO)
+            .with_writer(non_blocking)
+            .init();
+        Some(guard)
+    } else {
+        tracing_subscriber::fmt().with_timer(local_time).init();
+        None
+    }
 }
-
 
 #[allow(dead_code)]
 enum Message {
@@ -61,27 +64,39 @@ async fn read_body(len: u16, reader: &mut OwnedReadHalf) -> Result<Vec<u8>, std:
     let mut buf = Vec::new();
     buf.resize(len as usize, b'\0');
     let mut read_len = 0;
-    loop {
-        match reader.read(&mut buf[read_len..]).await {
-            Ok(size) => {
-                if size == 0 {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::ConnectionAborted,
-                        "",
-                    ));
-                }
-                read_len += size;
-                if read_len == len {
-                    return Ok(buf);
-                } else {
-                    continue;
-                }
-            }
-            Err(e) => {
-                return Err(e);
-            }
+    tokio::select! {
+        _ = tokio::time::sleep(std::time::Duration::from_secs(10))=>{
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "",
+            ));
         }
-    }
+        r = async {
+            loop {
+                match reader.read(&mut buf[read_len..]).await {
+                    Ok(size) => {
+                        if size == 0 {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::ConnectionAborted,
+                                "",
+                            ));
+                        }
+                        read_len += size;
+                        if read_len == len {
+                            return Ok(buf);
+                        } else {
+                            continue;
+                        }
+                    }
+                    Err(e) => {
+                        return Err(e);
+                    }
+                }
+            }
+        }=>{
+            return r;
+        }
+    };
 }
 
 async fn find_another(map: &HashMap<String, WriterHandle>, me: String) -> Option<&WriterHandle> {
@@ -134,7 +149,7 @@ async fn main() {
     let config = SerConfig::from_config_file("./rely_config.toml").unwrap();
     let _ = NodeConfig::from_config_file("./node.toml").unwrap();
 
-	let _log_guard = init_log();
+    let _log_guard = init_log();
 
     let listen = TcpListener::bind(config.bind).await.unwrap();
 
@@ -178,7 +193,7 @@ async fn main() {
                 Some(Message::Data((_num, buff))) => {
                     //println!("receive data from {num}:\n{buff:?}");
                     match ip_dest_parse::get_dest_ip(&buff) {
-                        Some((source,dest)) => match find_another(&map, dest.clone()).await {
+                        Some((source, dest)) => match find_another(&map, dest.clone()).await {
                             Some(writer) => {
                                 let timestamp = writer.timestamp;
                                 let writer_identifier = writer.identifier.clone();
@@ -189,7 +204,7 @@ async fn main() {
                                     match write_all::write_all(&mut writer, buff).await {
                                         Ok(()) => {}
                                         Err(e) => {
-											tracing::info!("Removed, {source} writing to {dest} has an error: {e:?}");
+                                            tracing::info!("Removed, {source} writing to {dest} has an error: {e:?}");
                                             match self_sender_weak.upgrade() {
                                                 Some(tx) => {
                                                     let _ = tx.send(Message::Remove((
@@ -216,7 +231,12 @@ async fn main() {
                         .find(|(ip, handler)| **ip == index && handler.timestamp == version)
                     {
                         Some((index, handler)) => {
-							tracing::info!("{}, {}, {} removed successfully from the group",handler.identifier,handler.physical_addr,handler.vir_addr);
+                            tracing::info!(
+                                "{}, {}, {} removed successfully from the group",
+                                handler.identifier,
+                                handler.physical_addr,
+                                handler.vir_addr
+                            );
                             let index = index.to_owned();
                             map.remove(&index);
                         }
@@ -249,28 +269,35 @@ async fn main() {
     // let mut join_set = JoinSet::new();
     //let mut index = 0;
     while let Ok((mut stream, socket_addr)) = listen.accept().await {
-        //println!("socket_addr {socket_addr:?}");
+        println!("socket_addr {socket_addr:?}");
         //println!("{socket_ip:?}");
         let its_identifier = {
             let mut buf = [0u8; 32];
-            match stream.read_exact(&mut buf).await {
-                Ok(size) => {
-                    if size != 32 {
-                        continue;
-                    }
-                    match String::from_utf8(buf.to_vec()) {
-                        Ok(index) => index,
+            tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_secs(3)) =>{
+                    continue;
+                }
+                result = stream.read_exact(&mut buf) =>{
+                    match result {
+                        Ok(size) => {
+                            if size == 0 || size != 32 {
+                                continue;
+                            }
+                            match String::from_utf8(buf.to_vec()) {
+                                Ok(index) => index,
+                                Err(_) => {
+                                    continue;
+                                }
+                            }
+                        }
                         Err(_) => {
                             continue;
                         }
                     }
                 }
-                Err(_) => {
-                    continue;
-                }
             }
         };
-        //println!("its identifier {its_identifier}");
+        println!("its identifier {its_identifier}");
         let index = its_identifier;
         let vir_addr = match read_node_list().get(&index) {
             Some(v) => v.to_owned(),
@@ -283,12 +310,13 @@ async fn main() {
         let timestamp = chrono::Local::now().timestamp_nanos();
         let writer = WriterHandle {
             timestamp,
-            vir_addr:vir_addr.clone(),
+            vir_addr: vir_addr.clone(),
             socket: Arc::new(Mutex::new(writer)),
             physical_addr: socket_addr.ip().to_string(),
             identifier: index.clone(),
         };
-		tracing::info!("{index}, {socket_addr}, {vir_addr} adds to the group");
+        println!("{index}, {socket_addr}, {vir_addr} adds to the group");
+        tracing::info!("{index}, {socket_addr}, {vir_addr} adds to the group");
         let _ = tx.send(Message::Add((index.clone(), writer)));
         let tx = tx.clone();
         tokio::spawn(async move {
@@ -300,7 +328,7 @@ async fn main() {
                     Ok(size) => {
                         //println!("read in comming {size}");
                         if size == 0 {
-							tracing::info!("Removed, {index}<=>{vir_addr} may partially shutdown during read len with size 0");
+                            tracing::info!("Removed, {index}<=>{vir_addr} may partially shutdown during read len with size 0");
                             let _ = tx.send(Message::Remove((index, timestamp)));
                             return;
                         }
@@ -316,7 +344,7 @@ async fn main() {
                                     //let _ = tx.send(Message::Mock((index, buf)));
                                 }
                                 Err(e) => {
-									tracing::info!("Removed, {index}<=>{vir_addr} has an error during read packet body: {e:?}");
+                                    tracing::info!("Removed, {index}<=>{vir_addr} has an error during read packet body: {e:?}");
                                     let _ = tx.send(Message::Remove((index, timestamp)));
                                     return;
                                 }
@@ -326,7 +354,7 @@ async fn main() {
                         }
                     }
                     Err(e) => {
-						tracing::info!("Removed, {index}<=>{vir_addr} has an error during read body len: {e:?}");
+                        tracing::info!("Removed, {index}<=>{vir_addr} has an error during read body len: {e:?}");
                         let _ = tx.send(Message::Remove((index, timestamp)));
                         return;
                     }

@@ -316,6 +316,8 @@ async fn main() {
         }
     };
 
+	println!("connect to server successfully!");
+
     let (mut tun_writer, mut tun_reader) = framed.split();
 
     let (tun_writer_tx, mut tun_writer_rx) = tokio::sync::mpsc::unbounded_channel();
