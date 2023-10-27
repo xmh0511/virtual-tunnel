@@ -317,7 +317,7 @@ async fn main() {
             Some(v) => v.to_owned(),
             None => {
 				let index = index.replace('\n', "\\n").replace('\r', "\\r");
-				tracing::info!(r#"The identifier "{index}" does not exist in the group, shudown the connection"#);
+				tracing::info!(r#"The identifier "{index}" does not exist in the group, shutdown the connection"#);
                 let _ = stream.shutdown().await;
                 continue;
             }
