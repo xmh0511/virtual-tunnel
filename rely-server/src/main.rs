@@ -298,7 +298,8 @@ async fn main() {
                             }
                             match String::from_utf8(buf.to_vec()) {
                                 Ok(index) => index,
-                                Err(_) => {
+                                Err(e) => {
+									tracing::info!("an error occurs during parsing the identifier {e:?}");
                                     continue;
                                 }
                             }
@@ -315,6 +316,7 @@ async fn main() {
         let vir_addr = match read_node_list().get(&index) {
             Some(v) => v.to_owned(),
             None => {
+				tracing::info!("The identifier {index} does not exist in the group, shudown the connection");
                 let _ = stream.shutdown().await;
                 continue;
             }
