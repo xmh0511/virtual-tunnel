@@ -311,13 +311,13 @@ async fn main() {
                 }
             }
         };
-        println!("its identifier {its_identifier}");
+        println!(r#"its identifier "{}""#,its_identifier.replace('\n', "\\n").replace('\r', "\\r"));
         let index = its_identifier;
         let vir_addr = match read_node_list().get(&index) {
             Some(v) => v.to_owned(),
             None => {
 				let index = index.replace('\n', "\\n").replace('\r', "\\r");
-				tracing::info!("The identifier {index} does not exist in the group, shudown the connection");
+				tracing::info!(r#"The identifier "{index}" does not exist in the group, shudown the connection"#);
                 let _ = stream.shutdown().await;
                 continue;
             }
