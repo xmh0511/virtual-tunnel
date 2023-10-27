@@ -206,6 +206,7 @@ async fn read_data_len(stream: &mut OwnedReadHalf) -> Option<u16> {
                 read_size += size;
                 if read_size == 2 {
                     let len = u16::from_be_bytes(buff_len);
+					//println!("data len: {len}");
                     return Some(len);
                 } else {
                     continue;

@@ -49,7 +49,7 @@ enum Message {
     Remove((String, i64)),
     Mock((String, Vec<u8>)),
 }
-
+#[derive(Debug)]
 struct WriterHandle {
     timestamp: i64,
     vir_addr: String,
@@ -225,7 +225,7 @@ async fn main() {
                     }
                 }
                 Some(Message::Remove((index, version))) => {
-                    //println!("remove {num}");
+                    println!("remove {index}, {version}, {map:?}");
                     match map
                         .iter()
                         .find(|(ip, handler)| **ip == index && handler.timestamp == version)
@@ -238,9 +238,17 @@ async fn main() {
                                 handler.vir_addr
                             );
                             let index = index.to_owned();
-                            map.remove(&index);
+                            let writer = map.remove(&index);
+                            match writer {
+                                Some(v) => {
+                                    let _ = v.socket.lock().await.shutdown().await;
+                                }
+                                None => {}
+                            }
                         }
-                        None => {}
+                        None => {
+                            println!("{index} {version} not found in the map when removing");
+                        }
                     }
                 }
                 Some(Message::Mock((_num, _buff))) => {
