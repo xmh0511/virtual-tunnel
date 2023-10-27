@@ -183,7 +183,9 @@ async fn main() {
                         Some(v) => {
                             if ((*v.1).timestamp) <= writer.timestamp {
                                 map.insert(num, writer);
-                            }
+                            }else{
+								tracing::info!("new added writer's version is older than that of the saved one");
+							}
                         }
                         None => {
                             map.insert(num, writer);
