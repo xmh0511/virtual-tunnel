@@ -355,8 +355,15 @@ async fn main() {
 
     //let _ = tx_in_socket.send(Message::SetSocketWriter(Arc::new(Mutex::new(socket_writer))));
     let socket_writer_rx = Arc::new(Mutex::new(socket_writer_rx));
+    let (recon_tx, mut recon_rx) = tokio::sync::mpsc::unbounded_channel();
+    let recon_tx_ctrl = recon_tx.clone();
+    ctrlc2::set_async_handler(async move {
+        recon_tx_ctrl
+            .send(LoopMessage::Close)
+            .expect("Signal error");
+    })
+    .await;
     loop {
-        let (recon_tx, mut recon_rx) = tokio::sync::mpsc::unbounded_channel();
         let tun_writer_tx_in_socket_read = tun_writer_tx.clone();
         let socket_writer_tx_in_socket_read = socket_writer_tx.clone();
         let recon_tx_0 = recon_tx.clone();
@@ -376,12 +383,12 @@ async fn main() {
                             }
                         },
                         None => {
-                            let _ = recon_tx_0.send(());
+                            let _ = recon_tx_0.send(LoopMessage::ReTry);
                             return;
                         }
                     },
                     None => {
-                        let _ = recon_tx_0.send(());
+                        let _ = recon_tx_0.send(LoopMessage::ReTry);
                         return;
                     }
                 }
@@ -389,6 +396,7 @@ async fn main() {
         });
 
         let socket_writer_rx = socket_writer_rx.clone();
+        let recon_tx_1 = recon_tx.clone();
         let socket_writer_task = tokio::spawn(async move {
             let mut guard = socket_writer_rx.lock().await;
             loop {
@@ -397,7 +405,7 @@ async fn main() {
                         Ok(_) => {}
                         Err(e) => {
                             println!("write socket error: {e:?}");
-                            let _ = recon_tx.send(());
+                            let _ = recon_tx_1.send(LoopMessage::ReTry);
                             return;
                         }
                     },
@@ -408,7 +416,10 @@ async fn main() {
             }
         });
 
-        let _ = recon_rx.recv().await;
+        if let Some(LoopMessage::Close) = recon_rx.recv().await {
+			println!("close!!!!!!");
+            break;
+        }
 
         socket_read_task.abort();
         socket_writer_task.abort();
@@ -416,4 +427,9 @@ async fn main() {
         socket_reader = r;
         socket_writer = w;
     }
+}
+
+enum LoopMessage {
+    ReTry,
+    Close,
 }
