@@ -17,6 +17,7 @@ serde = {version = "1.0.188",features = ["serde_derive"]}
 md5 = "0.7.0"
 futures-util = { version = "0.3" }
 ctrlc2 = { version = "3.5", features = ["tokio", "termination"] }
+byte-aes = "0.2.0"
 
 [dependencies.uuid]
 version = "1.4.1"

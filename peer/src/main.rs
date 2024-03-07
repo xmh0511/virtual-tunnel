@@ -15,6 +15,8 @@ use tun2::Configuration;
 use packet::Error as PktError;
 use std::io::Error as StdError;
 
+use byte_aes::{Encryptor,Decryptor};
+
 #[derive(Debug)]
 enum Error {
     Packet(PktError),
@@ -37,13 +39,13 @@ impl From<StdError> for Error {
 
 //struct Reconnection;
 
-async fn write_packet_to_socket(packet: Vec<u8>, stream: &mut OwnedWriteHalf) -> Result<(), Error> {
-    let buff = &packet;
+async fn write_packet_to_socket(packet: Vec<u8>, stream: &mut OwnedWriteHalf,key:&String) -> Result<(), Error> {
+    let buff = encrypt_bytes(packet, key);
     let len = buff.len() as u16;
     let bytes = len.to_be_bytes();
     let mut write_buffer = Vec::new();
     write_buffer.extend_from_slice(&bytes);
-    write_buffer.extend_from_slice(buff);
+    write_buffer.extend_from_slice(&buff);
     match stream.write_all(&write_buffer).await {
         Ok(()) => {}
         Err(e) => {
@@ -215,7 +217,17 @@ async fn read_data_len(stream: &mut OwnedReadHalf) -> Option<u16> {
     }
 }
 
-async fn read_body(len: u16, reader: &mut OwnedReadHalf) -> Option<Vec<u8>> {
+fn descrypt_bytes(data:Vec<u8>,key:&String)->Vec<u8>{
+	let mut de = Decryptor::from(data);
+	de.decrypt_with(key)
+}
+
+fn encrypt_bytes(data:Vec<u8>,key:&String)->Vec<u8>{
+	let mut en = Encryptor::from(&data[..]);
+	en.encrypt_with(key)
+}
+
+async fn read_body(len: u16, reader: &mut OwnedReadHalf,key:&String) -> Option<Vec<u8>> {
     let len = len as usize;
     let mut buf = Vec::new();
     buf.resize(len, b'\0');
@@ -228,7 +240,7 @@ async fn read_body(len: u16, reader: &mut OwnedReadHalf) -> Option<Vec<u8>> {
                 }
                 read_len += size;
                 if read_len == len {
-                    return Some(buf);
+                    return Some(descrypt_bytes(buf,key));
                 } else {
                     continue;
                 }
@@ -252,6 +264,7 @@ struct Config {
     route: String,
     try_times: i32,
     identifier: String,
+	encrypt_key:String
 }
 
 #[tokio::main]
@@ -367,10 +380,11 @@ async fn main() {
         let tun_writer_tx_in_socket_read = tun_writer_tx.clone();
         let socket_writer_tx_in_socket_read = socket_writer_tx.clone();
         let recon_tx_0 = recon_tx.clone();
+		let encrypt_key = config_file.encrypt_key.clone();
         let socket_read_task = tokio::spawn(async move {
             loop {
                 match read_data_len(&mut socket_reader).await {
-                    Some(size) => match read_body(size, &mut socket_reader).await {
+                    Some(size) => match read_body(size, &mut socket_reader,&encrypt_key).await {
                         Some(buf) => match parse_socket_packet(buf, current_vir_ip).await {
                             Ok(WriteType::ToSocket(pkt)) => {
                                 let _ = socket_writer_tx_in_socket_read.send(pkt);
@@ -397,11 +411,12 @@ async fn main() {
 
         let socket_writer_rx = socket_writer_rx.clone();
         let recon_tx_1 = recon_tx.clone();
+		let encrypt_key = config_file.encrypt_key.clone();
         let socket_writer_task = tokio::spawn(async move {
             let mut guard = socket_writer_rx.lock().await;
             loop {
                 match guard.recv().await {
-                    Some(pkt) => match write_packet_to_socket(pkt, &mut socket_writer).await {
+                    Some(pkt) => match write_packet_to_socket(pkt, &mut socket_writer,&encrypt_key).await {
                         Ok(_) => {}
                         Err(e) => {
                             println!("write socket error: {e:?}");

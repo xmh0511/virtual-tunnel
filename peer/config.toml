@@ -3,3 +3,4 @@ vir_addr = "10.0.0.2"
 route = "10.0.0.0/24"
 try_times = 10
 identifier = "323fc03b36e4aa10de6f76c29231de8b"
+encrypt_key = "d828725179d622a56f951e527a966ed7"
