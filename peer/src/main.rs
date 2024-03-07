@@ -1,5 +1,6 @@
 use std::{net::SocketAddr, sync::Arc};
 
+use base64::Engine;
 use config_file::FromConfigFile;
 use futures::{SinkExt, StreamExt};
 
@@ -219,14 +220,14 @@ async fn read_data_len(stream: &mut OwnedReadHalf) -> Option<u16> {
 }
 
 fn descrypt_bytes(data:Vec<u8>,key:&String)->Vec<u8>{
-	let data = base64::encode(data);
-	let mut de = Decryptor::from(data.as_bytes());
-	de.decrypt_with(key)
+	let mut de = Decryptor::from(data);
+	base64::decode(de.decrypt_with(key)).unwrap_or_default()
 }
 
 fn encrypt_bytes(data:Vec<u8>,key:&String)->Vec<u8>{
-	let mut en = Encryptor::from(&data[..]);
-	base64::decode(en.encrypt_with(key)).unwrap_or_default()
+	let data = base64::encode(data);
+	let mut en = Encryptor::from(&data as &str);
+	en.encrypt_with(key)
 }
 
 async fn read_body(len: u16, reader: &mut OwnedReadHalf,key:&String) -> Option<Vec<u8>> {

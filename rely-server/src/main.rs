@@ -149,7 +149,7 @@ fn read_node_list() -> HashMap<String, String> {
 
 fn descrypt_bytes(data:Vec<u8>,key:&String)->Vec<u8>{
 	let mut de = Decryptor::from(data);
-	de.decrypt_with(key)
+	base64::decode(de.decrypt_with(key)).unwrap_or_default()
 }
 
 #[tokio::main]
