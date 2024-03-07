@@ -10,6 +10,8 @@ use tokio::{
     sync::Mutex,
 };
 
+use byte_aes::Decryptor;
+
 //use tun::TunPacket;
 
 pub mod write_all;
@@ -125,6 +127,7 @@ struct NodeConfig {
 #[derive(Deserialize)]
 struct SerConfig {
     bind: String,
+	encrypt_key:String
 }
 
 use config_file::FromConfigFile;
@@ -142,6 +145,11 @@ fn read_node_list() -> HashMap<String, String> {
         }
         Err(_) => Default::default(),
     }
+}
+
+fn descrypt_bytes(data:Vec<u8>,key:&String)->Vec<u8>{
+	let mut de = Decryptor::from(data);
+	de.decrypt_with(key)
 }
 
 #[tokio::main]
@@ -173,6 +181,7 @@ async fn main() {
     //     }
     // });
     let weak_tx = tx.downgrade();
+	let encrpt_key = config.encrypt_key;
     let write_tasks = tokio::spawn(async move {
         let mut map: HashMap<String, WriterHandle> = HashMap::new();
         loop {
@@ -194,7 +203,8 @@ async fn main() {
                 }
                 Some(Message::Data((_num, buff))) => {
                     //println!("receive data from {num}:\n{buff:?}");
-                    match ip_dest_parse::get_dest_ip(&buff) {
+					let cleartext_buff = descrypt_bytes(buff.clone(),&encrpt_key);
+                    match ip_dest_parse::get_dest_ip(&cleartext_buff) {
                         Some((source, dest)) => match find_another(&map, dest.clone()).await {
                             Some(writer) => {
                                 let timestamp = writer.timestamp;

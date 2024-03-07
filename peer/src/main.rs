@@ -40,6 +40,7 @@ impl From<StdError> for Error {
 //struct Reconnection;
 
 async fn write_packet_to_socket(packet: Vec<u8>, stream: &mut OwnedWriteHalf,key:&String) -> Result<(), Error> {
+	println!("orgin packet prepare to write {packet:?}");
     let buff = encrypt_bytes(packet, key);
     let len = buff.len() as u16;
     let bytes = len.to_be_bytes();
@@ -240,7 +241,9 @@ async fn read_body(len: u16, reader: &mut OwnedReadHalf,key:&String) -> Option<V
                 }
                 read_len += size;
                 if read_len == len {
-                    return Some(descrypt_bytes(buf,key));
+					let r = descrypt_bytes(buf,key);
+					println!("read from socket after decrypt {r:?}");
+                    return Some(r);
                 } else {
                     continue;
                 }
