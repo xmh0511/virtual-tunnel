@@ -203,7 +203,7 @@ async fn main() {
                 }
                 Some(Message::Data((_num, buff))) => {
 					let cleartext_buff = descrypt_bytes(buff.clone(),&encrpt_key);
-					println!("receive data from {num}:\n{cleartext_buff:?}");
+					println!("receive data from {_num}:\n{cleartext_buff:?}");
                     match ip_dest_parse::get_dest_ip(&cleartext_buff) {
                         Some((source, dest)) => match find_another(&map, dest.clone()).await {
                             Some(writer) => {
