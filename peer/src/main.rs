@@ -219,13 +219,14 @@ async fn read_data_len(stream: &mut OwnedReadHalf) -> Option<u16> {
 }
 
 fn descrypt_bytes(data:Vec<u8>,key:&String)->Vec<u8>{
-	let mut de = Decryptor::from(data);
+	let data = base64::encode(data);
+	let mut de = Decryptor::from(data.as_bytes());
 	de.decrypt_with(key)
 }
 
 fn encrypt_bytes(data:Vec<u8>,key:&String)->Vec<u8>{
 	let mut en = Encryptor::from(&data[..]);
-	en.encrypt_with(key)
+	base64::decode(en.encrypt_with(key)).unwrap_or_default()
 }
 
 async fn read_body(len: u16, reader: &mut OwnedReadHalf,key:&String) -> Option<Vec<u8>> {
