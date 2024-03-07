@@ -11,6 +11,7 @@ use tokio::{
 };
 
 use byte_aes::Decryptor;
+use base64::Engine;
 
 //use tun::TunPacket;
 
@@ -149,7 +150,7 @@ fn read_node_list() -> HashMap<String, String> {
 
 fn descrypt_bytes(data:Vec<u8>,key:&String)->Vec<u8>{
 	let mut de = Decryptor::from(data);
-	base64::decode(de.decrypt_with(key)).unwrap_or_default()
+	base64::engine::general_purpose::STANDARD.decode(de.decrypt_with(key)).unwrap_or_default()
 }
 
 #[tokio::main]

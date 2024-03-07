@@ -221,11 +221,11 @@ async fn read_data_len(stream: &mut OwnedReadHalf) -> Option<u16> {
 
 fn descrypt_bytes(data:Vec<u8>,key:&String)->Vec<u8>{
 	let mut de = Decryptor::from(data);
-	base64::decode(de.decrypt_with(key)).unwrap_or_default()
+	base64::engine::general_purpose::STANDARD.decode(de.decrypt_with(key)).unwrap_or_default()
 }
 
 fn encrypt_bytes(data:Vec<u8>,key:&String)->Vec<u8>{
-	let data = base64::encode(data);
+	let data = base64::engine::general_purpose::STANDARD.encode(data);
 	let mut en = Encryptor::from(&data as &str);
 	en.encrypt_with(key)
 }
