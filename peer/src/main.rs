@@ -41,7 +41,6 @@ impl From<StdError> for Error {
 //struct Reconnection;
 
 async fn write_packet_to_socket(packet: Vec<u8>, stream: &mut OwnedWriteHalf,key:&String) -> Result<(), Error> {
-	println!("orgin packet prepare to write {packet:?}");
     let buff = encrypt_bytes(packet, key);
     let len = buff.len() as u16;
     let bytes = len.to_be_bytes();
@@ -243,9 +242,7 @@ async fn read_body(len: u16, reader: &mut OwnedReadHalf,key:&String) -> Option<V
                 }
                 read_len += size;
                 if read_len == len {
-					let r = descrypt_bytes(buf,key);
-					println!("read from socket after decrypt {r:?}");
-                    return Some(r);
+                    return Some(descrypt_bytes(buf,key));
                 } else {
                     continue;
                 }
@@ -274,6 +271,8 @@ struct Config {
 
 #[tokio::main]
 async fn main() {
+	env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("trace")).init();
+
     let config_file = Config::from_config_file("./config.toml").unwrap();
 
     let rely_server: SocketAddr = config_file.rely.parse().unwrap();
@@ -283,7 +282,7 @@ async fn main() {
     if unique_identifier.len() != 32 {
         panic!("invalid identifier, whose len is not 32");
     }
-    println!("your identifier is {unique_identifier}");
+    log::info!("your identifier is {unique_identifier}");
 
     let mut config = Configuration::default();
 
@@ -310,7 +309,7 @@ async fn main() {
         }
     };
 
-    println!("connect to server successfully!");
+    log::info!("connect to server successfully!");
 
     let (mut tun_writer, mut tun_reader) = framed.split();
 
@@ -335,7 +334,7 @@ async fn main() {
                         let _ = socket_writer_tx_in_tun_read.send(pkt);
                     }
                     Err(e) => {
-                        println!("from tun:\n{e:?}");
+                        log::info!("from tun:\n{e:?}");
                     }
                 };
             }
@@ -347,10 +346,10 @@ async fn main() {
         async move {
             let total_times = times;
             while times > 0 {
-                println!("try to reconnect!!!!");
+                log::info!("try to reconnect!!!!");
                 match TcpStream::connect(rely_server).await {
                     Ok(mut new_stream) => {
-                        println!("connect to server successfully!!!!");
+                        log::info!("connect to server successfully!!!!");
                         new_stream
                             .write_all(unique_identifier.as_bytes())
                             .await
@@ -359,7 +358,7 @@ async fn main() {
                         return (socket_reader, socket_writer);
                     }
                     Err(e) => {
-                        println!("reconnect fail due to {e:?}");
+                        log::info!("reconnect fail due to {e:?}");
                         std::thread::sleep(std::time::Duration::from_secs(5));
                     }
                 };
@@ -398,7 +397,7 @@ async fn main() {
                                 let _ = tun_writer_tx_in_socket_read.send(pkt);
                             }
                             Err(e) => {
-                                println!("from socket:\n{e:?}");
+                                log::info!("from socket:\n{e:?}");
                             }
                         },
                         None => {
@@ -424,7 +423,7 @@ async fn main() {
                     Some(pkt) => match write_packet_to_socket(pkt, &mut socket_writer,&encrypt_key).await {
                         Ok(_) => {}
                         Err(e) => {
-                            println!("write socket error: {e:?}");
+                            log::info!("write socket error: {e:?}");
                             let _ = recon_tx_1.send(LoopMessage::ReTry);
                             return;
                         }
@@ -437,7 +436,7 @@ async fn main() {
         });
 
         if let Some(LoopMessage::Close) = recon_rx.recv().await {
-			println!("close!!!!!!");
+			log::info!("close!!!!!!");
             break;
         }
 

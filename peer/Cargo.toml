@@ -19,6 +19,8 @@ futures-util = { version = "0.3" }
 ctrlc2 = { version = "3.5", features = ["tokio", "termination"] }
 byte-aes = "0.2.0"
 base64 = "0.22.0"
+log = "0.4"
+env_logger = "0.11"
 
 [dependencies.uuid]
 version = "1.4.1"
