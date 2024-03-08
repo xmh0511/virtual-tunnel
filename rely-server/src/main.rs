@@ -189,6 +189,7 @@ async fn main() {
             //println!("execute");
             match rx.recv().await {
                 Some(Message::Add((num, writer))) => {
+					println!("add add add add!!!!!!!!!!");
                     match map.iter().find(|(index, _)| **index == num) {
                         Some(v) => {
                             if ((*v.1).timestamp) <= writer.timestamp {
@@ -204,6 +205,10 @@ async fn main() {
                 }
                 Some(Message::Data((_num, buff))) => {
 					let cleartext_buff = descrypt_bytes(buff.clone(),&encrpt_key);
+					if cleartext_buff.len() < 20 {
+						tracing::info!("Receive an invalid packet from peer, len = {}",cleartext_buff.len());
+						continue;
+					}
 					//println!("receive data from {_num}:\n{cleartext_buff:?}");
                     match ip_dest_parse::get_dest_ip(&cleartext_buff) {
                         Some((source, dest)) => match find_another(&map, dest.clone()).await {
