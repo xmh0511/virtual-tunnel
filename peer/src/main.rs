@@ -1,6 +1,5 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use base64::Engine;
 use config_file::FromConfigFile;
 use futures::{SinkExt, StreamExt};
 
@@ -16,7 +15,7 @@ use tun2::Configuration;
 use packet::Error as PktError;
 use std::io::Error as StdError;
 
-use byte_aes::{Decryptor, Encryptor};
+use byte_aes::Aes256Cryptor;
 
 #[derive(Debug)]
 enum Error {
@@ -43,7 +42,7 @@ impl From<StdError> for Error {
 async fn write_packet_to_socket(
     packet: Vec<u8>,
     stream: &mut OwnedWriteHalf,
-    key: &String,
+    key: &Aes256Cryptor,
 ) -> Result<(), Error> {
     let buff = encrypt_bytes(packet, key);
     let len = buff.len() as u16;
@@ -225,20 +224,15 @@ async fn read_data_len(stream: &mut OwnedReadHalf) -> Option<u16> {
     }
 }
 
-fn descrypt_bytes(data: Vec<u8>, key: &String) -> Vec<u8> {
-    let mut de = Decryptor::from(data);
-    base64::engine::general_purpose::STANDARD
-        .decode(de.decrypt_with(key))
-        .unwrap_or_default()
+fn descrypt_bytes(data: Vec<u8>, cryptor: &Aes256Cryptor) -> Vec<u8> {
+    cryptor.decrypt(data).unwrap_or_default()
 }
 
-fn encrypt_bytes(data: Vec<u8>, key: &String) -> Vec<u8> {
-    let data = base64::engine::general_purpose::STANDARD.encode(data);
-    let mut en = Encryptor::from(&data as &str);
-    en.encrypt_with(key)
+fn encrypt_bytes(data: Vec<u8>, cryptor: &Aes256Cryptor) -> Vec<u8> {
+    cryptor.encrypt(data)
 }
 
-async fn read_body(len: u16, reader: &mut OwnedReadHalf, key: &String) -> Option<Vec<u8>> {
+async fn read_body(len: u16, reader: &mut OwnedReadHalf, key: &Aes256Cryptor) -> Option<Vec<u8>> {
     let len = len as usize;
     let mut buf = Vec::new();
     buf.resize(len, b'\0');
@@ -286,6 +280,8 @@ async fn main() {
 
     let rely_server: SocketAddr = config_file.rely.parse().unwrap();
     let current_vir_ip: Ipv4Addr = config_file.vir_addr.parse().unwrap();
+
+    let data_cryptor = Aes256Cryptor::try_from(&config_file.encrypt_key).unwrap();
 
     let unique_identifier = config_file.identifier;
     if unique_identifier.len() != 32 {
@@ -389,15 +385,17 @@ async fn main() {
             .expect("Signal error");
     })
     .await;
+
     loop {
         let tun_writer_tx_in_socket_read = tun_writer_tx.clone();
         let socket_writer_tx_in_socket_read = socket_writer_tx.clone();
         let recon_tx_0 = recon_tx.clone();
-        let encrypt_key = config_file.encrypt_key.clone();
+        let data_cryptor_in = data_cryptor.clone();
         let socket_read_task = tokio::spawn(async move {
             loop {
                 match read_data_len(&mut socket_reader).await {
-                    Some(size) => match read_body(size, &mut socket_reader, &encrypt_key).await {
+                    Some(size) => match read_body(size, &mut socket_reader, &data_cryptor_in).await
+                    {
                         Some(buf) => match parse_socket_packet(buf, current_vir_ip).await {
                             Ok(WriteType::ToSocket(pkt)) => {
                                 let _ = socket_writer_tx_in_socket_read.send(pkt);
@@ -424,13 +422,15 @@ async fn main() {
 
         let socket_writer_rx = socket_writer_rx.clone();
         let recon_tx_1 = recon_tx.clone();
-        let encrypt_key = config_file.encrypt_key.clone();
+        let data_cryptor_out = data_cryptor.clone();
         let socket_writer_task = tokio::spawn(async move {
             let mut guard = socket_writer_rx.lock().await;
             loop {
                 match guard.recv().await {
                     Some(pkt) => {
-                        match write_packet_to_socket(pkt, &mut socket_writer, &encrypt_key).await {
+                        match write_packet_to_socket(pkt, &mut socket_writer, &data_cryptor_out)
+                            .await
+                        {
                             Ok(_) => {}
                             Err(e) => {
                                 log::info!("write socket error: {e:?}");
