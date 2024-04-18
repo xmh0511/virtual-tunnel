@@ -17,6 +17,7 @@ use std::io::Error as StdError;
 
 use byte_aes::Aes256Cryptor;
 
+#[allow(dead_code)]
 #[derive(Debug)]
 enum Error {
     Packet(PktError),
